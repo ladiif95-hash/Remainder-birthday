@@ -39,5 +39,3 @@ npm run dev
 - Users and birthdays are stored in MongoDB.
 - Passwords are stored as bcrypt hashes, not plain text.
 - JWT is stored in `localStorage` (consider httpOnly cookies for production).
-
-# Remainder-birthday
