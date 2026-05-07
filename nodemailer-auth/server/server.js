@@ -5,6 +5,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import nodemailer from "nodemailer";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const app = express();
@@ -14,6 +15,9 @@ const MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/birthday-reminder";
 let databaseConnection;
 const localMongoPattern = /(?:localhost|127\.0\.0\.1)/;
+const useMemoryStore = Boolean(process.env.VERCEL && localMongoPattern.test(MONGODB_URI));
+const memoryUsers = new Map();
+const memoryBirthdays = new Map();
 
 app.use(cors());
 app.use(express.json());
@@ -126,6 +130,10 @@ function publicBirthday(birthday) {
   };
 }
 
+function memoryUserById(id) {
+  return [...memoryUsers.values()].find((user) => user.id === id);
+}
+
 function asyncHandler(handler) {
   return (req, res, next) => {
     Promise.resolve(handler(req, res, next)).catch(next);
@@ -133,8 +141,8 @@ function asyncHandler(handler) {
 }
 
 function connectDatabase() {
-  if (process.env.VERCEL && localMongoPattern.test(MONGODB_URI)) {
-    throw new Error("Database is not configured for production");
+  if (useMemoryStore) {
+    return Promise.resolve();
   }
 
   if (mongoose.connection.readyState === 1) {
@@ -160,7 +168,7 @@ async function authenticate(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = await User.findById(payload.id);
+    const user = useMemoryStore ? memoryUserById(payload.id) : await User.findById(payload.id);
 
     if (!user) {
       return res.status(401).json({ error: "Invalid auth token" });
@@ -212,18 +220,33 @@ app.post("/api/signup", asyncHandler(async (req, res) => {
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    const existingUser = await User.findOne({ email: normalizedEmail });
+    const existingUser = useMemoryStore
+      ? memoryUsers.get(normalizedEmail)
+      : await User.findOne({ email: normalizedEmail });
 
     if (existingUser) {
       return res.status(409).json({ error: "Email already registered" });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const user = await User.create({
-      name: name.trim(),
-      email: normalizedEmail,
-      password: passwordHash,
-    });
+    const user = useMemoryStore
+      ? {
+          id: crypto.randomUUID(),
+          name: name.trim(),
+          email: normalizedEmail,
+          password: passwordHash,
+          createdAt: new Date(),
+        }
+      : await User.create({
+          name: name.trim(),
+          email: normalizedEmail,
+          password: passwordHash,
+        });
+
+    if (useMemoryStore) {
+      memoryUsers.set(normalizedEmail, user);
+      memoryBirthdays.set(user.id, []);
+    }
 
     sendWelcomeEmail(user.email, user.name).catch((error) => {
       console.error("Email send failed:", error.message);
@@ -243,7 +266,9 @@ app.post("/api/login", asyncHandler(async (req, res) => {
   if (error) return res.status(400).json({ error });
 
   const normalizedEmail = email.toLowerCase().trim();
-  const user = await User.findOne({ email: normalizedEmail });
+  const user = useMemoryStore
+    ? memoryUsers.get(normalizedEmail)
+    : await User.findOne({ email: normalizedEmail });
 
   if (!user) return res.status(401).json({ error: "Invalid credentials" });
 
@@ -258,6 +283,10 @@ app.get("/api/me", authenticate, (req, res) => {
 });
 
 app.get("/api/birthdays", authenticate, asyncHandler(async (req, res) => {
+  if (useMemoryStore) {
+    return res.json({ birthdays: memoryBirthdays.get(req.user.id) || [] });
+  }
+
   const birthdays = await Birthday.find({ userId: req.user.id }).sort({ createdAt: -1 });
 
   res.json({ birthdays: birthdays.map(publicBirthday) });
@@ -269,18 +298,44 @@ app.post("/api/birthdays", authenticate, asyncHandler(async (req, res) => {
 
   if (error) return res.status(400).json({ error });
 
-  const birthday = await Birthday.create({
-    userId: req.user.id,
-    name: name.trim(),
-    date,
-    category,
-    notes: notes.trim(),
-  });
+  const birthday = useMemoryStore
+    ? {
+        id: crypto.randomUUID(),
+        name: name.trim(),
+        date,
+        category,
+        notes: notes.trim(),
+        createdAt: new Date(),
+      }
+    : await Birthday.create({
+        userId: req.user.id,
+        name: name.trim(),
+        date,
+        category,
+        notes: notes.trim(),
+      });
+
+  if (useMemoryStore) {
+    const birthdays = memoryBirthdays.get(req.user.id) || [];
+    memoryBirthdays.set(req.user.id, [birthday, ...birthdays]);
+  }
 
   res.status(201).json({ birthday: publicBirthday(birthday) });
 }));
 
 app.delete("/api/birthdays/:id", authenticate, asyncHandler(async (req, res) => {
+  if (useMemoryStore) {
+    const birthdays = memoryBirthdays.get(req.user.id) || [];
+    const nextBirthdays = birthdays.filter((birthday) => birthday.id !== req.params.id);
+
+    if (nextBirthdays.length === birthdays.length) {
+      return res.status(404).json({ error: "Birthday not found" });
+    }
+
+    memoryBirthdays.set(req.user.id, nextBirthdays);
+    return res.json({ ok: true });
+  }
+
   const birthday = await Birthday.findOneAndDelete({
     _id: req.params.id,
     userId: req.user.id,
