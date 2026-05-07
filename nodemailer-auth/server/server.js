@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 5000;
 const MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/birthday-reminder";
 let databaseConnection;
+const localMongoPattern = /(?:localhost|127\.0\.0\.1)/;
 
 app.use(cors());
 app.use(express.json());
@@ -132,13 +133,19 @@ function asyncHandler(handler) {
 }
 
 function connectDatabase() {
+  if (process.env.VERCEL && localMongoPattern.test(MONGODB_URI)) {
+    throw new Error("Database is not configured for production");
+  }
+
   if (mongoose.connection.readyState === 1) {
     return Promise.resolve();
   }
 
-  databaseConnection ||= mongoose.connect(MONGODB_URI).then(() => {
-    console.log("MongoDB connected");
-  });
+  databaseConnection ||= mongoose
+    .connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 })
+    .then(() => {
+      console.log("MongoDB connected");
+    });
 
   return databaseConnection;
 }
@@ -294,6 +301,12 @@ app.use("/api", (req, res) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
+  if (error.message === "Database is not configured for production") {
+    return res.status(503).json({
+      error: "Database is not configured for production. Add MONGODB_URI in Vercel.",
+    });
+  }
+
   res.status(500).json({ error: "Server error" });
 });
 
