@@ -1,5 +1,5 @@
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+  import.meta.env.VITE_API_BASE_URL || "/api";
 
 async function request(path, options = {}) {
   const token = localStorage.getItem("token");
@@ -15,7 +15,7 @@ async function request(path, options = {}) {
       },
     });
   } catch {
-    throw new Error("Backend server is not running on http://localhost:5000");
+    throw new Error("Backend server is not available");
   }
 
   const data = await response.json().catch(() => null);

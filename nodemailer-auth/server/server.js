@@ -5,12 +5,14 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import nodemailer from "nodemailer";
+import { fileURLToPath } from "node:url";
 
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/birthday-reminder";
+let databaseConnection;
 
 app.use(cors());
 app.use(express.json());
@@ -129,6 +131,18 @@ function asyncHandler(handler) {
   };
 }
 
+function connectDatabase() {
+  if (mongoose.connection.readyState === 1) {
+    return Promise.resolve();
+  }
+
+  databaseConnection ||= mongoose.connect(MONGODB_URI).then(() => {
+    console.log("MongoDB connected");
+  });
+
+  return databaseConnection;
+}
+
 async function authenticate(req, res, next) {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
@@ -174,6 +188,11 @@ async function sendWelcomeEmail(toEmail, name) {
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
+
+app.use("/api", asyncHandler(async (_req, _res, next) => {
+  await connectDatabase();
+  next();
+}));
 
 app.post("/api/signup", asyncHandler(async (req, res) => {
   try {
@@ -278,12 +297,17 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: "Server error" });
 });
 
-mongoose.connect(MONGODB_URI).then(() => {
-  console.log("MongoDB connected");
-  app.listen(PORT, () => {
-    console.log(`API running on http://localhost:${PORT}`);
-  });
-}).catch((error) => {
-  console.error("MongoDB connection failed:", error.message);
-  process.exit(1);
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  connectDatabase()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`API running on http://localhost:${PORT}`);
+      });
+    })
+    .catch((error) => {
+      console.error("MongoDB connection failed:", error.message);
+      process.exit(1);
+    });
+}
+
+export default app;

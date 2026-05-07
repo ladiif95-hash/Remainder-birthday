@@ -1,7 +1,11 @@
 {
-  "buildCommand": "cd nodemailer-auth/client && npm install && npm run build",
+  "buildCommand": "cd nodemailer-auth/server && npm install && cd ../client && npm install && npm run build",
   "outputDirectory": "nodemailer-auth/client/dist",
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
